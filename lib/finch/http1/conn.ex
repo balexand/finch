@@ -108,7 +108,7 @@ defmodule Finch.Conn do
 
     start_time = Telemetry.start(:request, metadata, extra_measurements)
 
-    case HTTP1.request(conn.mint, req.method, full_path, req.headers, req.body) do
+    case send_request(conn.mint, req.method, full_path, req.headers, req.body) do
       {:ok, mint, ref} ->
         Telemetry.stop(:request, start_time, metadata, extra_measurements)
         start_time = Telemetry.start(:response, metadata, extra_measurements)
@@ -128,6 +128,27 @@ defmodule Finch.Conn do
         metadata = Map.put(metadata, :error, error)
         Telemetry.stop(:request, start_time, metadata, extra_measurements)
         {:error, %{conn | mint: mint}, error}
+    end
+  end
+
+  defp send_request(mint, method, full_path, headers, body)
+       when is_binary(body) or is_list(body) or is_nil(body) do
+    HTTP1.request(mint, method, full_path, headers, body)
+  end
+
+  defp send_request(mint, method, full_path, headers, body) do
+    with {:ok, mint, ref} <- HTTP1.request(mint, method, full_path, headers, :stream) do
+      mint =
+        Enum.reduce(body, mint, fn iodata, mint ->
+          # FIXME error handling
+          {:ok, mint} = HTTP1.stream_request_body(mint, ref, iodata)
+          mint
+        end)
+
+      # FIXME error handling
+      {:ok, mint} = HTTP1.stream_request_body(mint, ref, :eof)
+
+      {:ok, mint, ref}
     end
   end
 
